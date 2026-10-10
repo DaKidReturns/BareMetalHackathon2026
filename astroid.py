@@ -62,10 +62,21 @@ def load_scaled(relative_path, size):
 
 
 # Load assets once at startup.
-background_image = load_image("", alpha=False)
-if background_image is not None:
-    background_image = pygame.transform.smoothscale(
-        background_image, (WIDTH, HEIGHT)
+# In-game background: deep-space starfield (the start screen keeps its nebula).
+# Build the stars once so they stay still instead of flickering every frame.
+background_image = None
+starfield_surface = pygame.Surface((WIDTH, HEIGHT))
+starfield_surface.fill((2, 5, 20))
+for _ in range(150):
+    star_x = random.randrange(WIDTH)
+    star_y = random.randrange(HEIGHT)
+    brightness = random.choice((90, 125, 165, 210, 240))
+    star_radius = 2 if brightness >= 210 and random.random() < 0.18 else 1
+    pygame.draw.circle(
+        starfield_surface,
+        (brightness // 2, min(255, brightness), min(255, brightness + 15)),
+        (star_x, star_y),
+        star_radius,
     )
 
 ship_image = load_image("player/ship_idle.png")
@@ -101,10 +112,24 @@ explosion_images = [
 ]
 explosion_images = [image for image in explosion_images if image]
 
-# Optional serial controller. Set ASTEROIDS_SERIAL_PORT to the actual port.
-# Keyboard controls always remain available.
+# Optional controller serial link.
+# Expected lines:
+#   tilt_left,0.91 / idle,0.97 / tilt_right,0.88
+#   button_a,1 / button_a,0  (A held/released: thrust)
+#   button_b                 (B press: shoot)
+#   button_c                 (C press: pause/resume, or restart after game over)
+# Explicit commands thrust,1 / thrust,0 / shoot / pause / restart also work.
+CONFIDENCE_THRESHOLD = 0.70
+CONTROLLER_STALE_MS = 1200
+
 arduino = None
 serial_port = os.environ.get("ASTEROIDS_SERIAL_PORT")
+latest_gesture = "idle"
+latest_confidence = 0.0
+last_gesture_ms = 0
+controller_thrust = False
+controller_events = []
+
 if serial_port and serial is not None:
     try:
         arduino = serial.Serial(serial_port, 9600, timeout=0)
@@ -113,7 +138,6 @@ if serial_port and serial is not None:
         print(f"Controller unavailable ({exc}); using keyboard controls.")
 else:
     print("No serial controller configured; using keyboard controls.")
-
 
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("NEON ASTEROIDS")
@@ -189,31 +213,49 @@ class Player:
     def update(self):
         self.thrusting = False
 
-        # Optional controller protocol: "x,y\n" integer pairs.
+        # Read gesture predictions and optional button/pressure events.
+        global latest_gesture, latest_confidence, last_gesture_ms
+        global controller_thrust, controller_events
         if arduino:
             try:
                 while arduino.in_waiting:
                     raw = arduino.readline().decode("utf-8", errors="ignore").strip()
-                    if "," not in raw:
+                    if not raw:
                         continue
-                    x_text, y_text = raw.split(",", 1)
-                    x_val, y_val = int(x_text), int(y_text)
-                    if x_val < -5:
-                        self.angle += 5
-                    elif x_val > 5:
-                        self.angle -= 5
-                    if y_val > 5:
-                        self.speed = min(self.speed + 0.15, 5)
-                        self.thrusting = True
+                    parts = [part.strip().lower() for part in raw.split(",")]
+                    command = parts[0]
+
+                    if command in ("tilt_left", "left", "idle", "tilt_right", "right"):
+                        confidence = 1.0
+                        if len(parts) > 1:
+                            try:
+                                confidence = float(parts[1])
+                            except ValueError:
+                                continue
+                        if confidence >= CONFIDENCE_THRESHOLD:
+                            latest_gesture = command
+                            latest_confidence = confidence
+                            last_gesture_ms = pygame.time.get_ticks()
+                    elif command in ("thrust", "button_a") and len(parts) > 1:
+                        controller_thrust = parts[1] in ("1", "true", "on", "pressed", "down")
+                    elif command in ("shoot", "button_b"):
+                        controller_events.append("shoot")
+                    elif command in ("pause", "restart", "button_c"):
+                        controller_events.append(command)
             except (ValueError, OSError):
                 pass
 
         keys = pygame.key.get_pressed()
-        if keys[pygame.K_LEFT]:
+        gesture = latest_gesture
+        if pygame.time.get_ticks() - last_gesture_ms > CONTROLLER_STALE_MS:
+            gesture = "idle"
+
+        if keys[pygame.K_LEFT] or gesture in ("tilt_left", "left"):
             self.angle += 4
-        if keys[pygame.K_RIGHT]:
+        if keys[pygame.K_RIGHT] or gesture in ("tilt_right", "right"):
             self.angle -= 4
-        if keys[pygame.K_UP]:
+
+        if keys[pygame.K_UP] or controller_thrust:
             self.speed = min(self.speed + 0.15, 5)
             self.thrusting = True
         else:
@@ -303,15 +345,7 @@ def check_collision(obj1, obj2):
 
 
 def draw_background():
-    if background_image is not None:
-        screen.blit(background_image, (0, 0))
-    else:
-        screen.fill(BLACK)
-        for _ in range(35):
-            pygame.draw.circle(
-                screen, (70, 110, 160),
-                (random.randrange(WIDTH), random.randrange(HEIGHT)), 1
-            )
+    screen.blit(starfield_surface, (0, 0))
 
 
 def main():
@@ -359,6 +393,17 @@ def main():
     while running:
         clock.tick(FPS)
         mouse_pos = pygame.mouse.get_pos()
+
+        for command in controller_events[:]:
+            if command == "shoot" and game_state == "playing":
+                tip_x = player.x + math.cos(math.radians(player.angle)) * player.radius * 2
+                tip_y = player.y - math.sin(math.radians(player.angle)) * player.radius * 2
+                bullets.append(Bullet(tip_x, tip_y, player.angle))
+            elif command in ("pause", "button_c") and game_state in ("playing", "paused"):
+                game_state = "paused" if game_state == "playing" else "playing"
+            elif command in ("restart", "button_c") and game_state == "game_over":
+                reset_game()
+            controller_events.remove(command)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
