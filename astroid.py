@@ -1,4 +1,3 @@
-
 import pygame
 import random
 import math
@@ -7,12 +6,18 @@ import serial
 
 from start_screen import StartScreen
 
+# --------------------------------------------------
 # Initialize Pygame
+# --------------------------------------------------
 pygame.init()
 
-# Game Constants
+# Game constants
 WIDTH, HEIGHT = 800, 600
 FPS = 60
+
+MAX_LIVES = 3
+INVULNERABILITY_MS = 2000
+LIFE_FLASH_MS = 600
 
 # Colors
 BLACK = (0, 0, 0)
@@ -21,14 +26,14 @@ RED = (255, 0, 0)
 GRAY = (150, 150, 150)
 LIGHT_GRAY = (200, 200, 200)
 
-# Asteroid Sizes
+# Asteroid sizes
 LARGE_ASTROID = 40
 MEDIUM_ASTROID = 20
 SMALL_ASTROID = 10
 
-ASTROID_SPEED = 10
-
 # Serial connection (optional)
+# Change this to your Arduino's actual Linux device path
+# when connecting the Arduino UNO Q.
 try:
     arduino = serial.Serial(
         "/dev/cu.usbmodem13201",
@@ -39,18 +44,94 @@ except (serial.SerialException, OSError):
     print("Microcontroller not found. Using keyboard controls.")
     arduino = None
 
-# Setup Display
+# Display setup
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Python Asteroids Shooter")
+
 clock = pygame.time.Clock()
 
 font = pygame.font.SysFont("Arial", 24, bold=True)
 button_font = pygame.font.SysFont("Arial", 20, bold=True)
 
-# Start screen
 start_screen = StartScreen(WIDTH, HEIGHT)
 
 
+# --------------------------------------------------
+# Shared ship geometry
+# --------------------------------------------------
+def get_ship_points(x, y, angle, radius):
+    """Return the three vertices of a triangular ship."""
+
+    tip_x = x + math.cos(math.radians(angle)) * radius * 2
+    tip_y = y - math.sin(math.radians(angle)) * radius * 2
+
+    left_x = x + math.cos(
+        math.radians(angle + 130)
+    ) * radius
+    left_y = y - math.sin(
+        math.radians(angle + 130)
+    ) * radius
+
+    right_x = x + math.cos(
+        math.radians(angle - 130)
+    ) * radius
+    right_y = y - math.sin(
+        math.radians(angle - 130)
+    ) * radius
+
+    return [
+        (int(tip_x), int(tip_y)),
+        (int(left_x), int(left_y)),
+        (int(right_x), int(right_y)),
+    ]
+
+
+def draw_lives(surface, lives, last_lost_time):
+    """Draw three ship icons to represent the player's lives."""
+
+    now = pygame.time.get_ticks()
+
+    start_x = WIDTH - 105
+    y = 28
+    spacing = 35
+    icon_radius = 7
+
+    for index in range(MAX_LIVES):
+        x = start_x + index * spacing
+
+        points = get_ship_points(
+            x, y, 90, icon_radius
+        )
+
+        if index < lives:
+            # A life that is still available.
+            pygame.draw.polygon(
+                surface, WHITE, points, 2
+            )
+
+        elif (
+            index == lives
+            and last_lost_time is not None
+            and now - last_lost_time < LIFE_FLASH_MS
+        ):
+            # The most recently lost life flashes red.
+            pygame.draw.polygon(
+                surface, RED, points
+            )
+            pygame.draw.polygon(
+                surface, RED, points, 2
+            )
+
+        else:
+            # Lost lives become empty grey outlines.
+            pygame.draw.polygon(
+                surface, GRAY, points, 2
+            )
+
+
+# --------------------------------------------------
+# Player
+# --------------------------------------------------
 class Player:
     def __init__(self):
         self.x = WIDTH // 2
@@ -59,37 +140,36 @@ class Player:
         self.speed = 0
         self.radius = 15
 
+        self.invulnerable_until = 0
+
+    def is_invulnerable(self):
+        return (
+            pygame.time.get_ticks()
+            < self.invulnerable_until
+        )
+
     def draw(self, surface):
-        tip_x = self.x + math.cos(
-            math.radians(self.angle)
-        ) * self.radius * 2
-        tip_y = self.y - math.sin(
-            math.radians(self.angle)
-        ) * self.radius * 2
+        # Blink while temporarily invulnerable.
+        if self.is_invulnerable():
+            blink_interval = 120
+            if (
+                pygame.time.get_ticks() // blink_interval
+            ) % 2 == 0:
+                return
 
-        bl_x = self.x + math.cos(
-            math.radians(self.angle + 130)
-        ) * self.radius
-        bl_y = self.y - math.sin(
-            math.radians(self.angle + 130)
-        ) * self.radius
-
-        br_x = self.x + math.cos(
-            math.radians(self.angle - 130)
-        ) * self.radius
-        br_y = self.y - math.sin(
-            math.radians(self.angle - 130)
-        ) * self.radius
+        points = get_ship_points(
+            self.x,
+            self.y,
+            self.angle,
+            self.radius,
+        )
 
         pygame.draw.polygon(
-            surface,
-            WHITE,
-            [(tip_x, tip_y), (bl_x, bl_y), (br_x, br_y)],
-            2,
+            surface, WHITE, points, 2
         )
 
     def update(self):
-        # Read optional Arduino sensor data
+        # Read optional Arduino sensor data.
         if arduino:
             while arduino.in_waiting > 0:
                 try:
@@ -115,11 +195,12 @@ class Player:
                 except (UnicodeDecodeError, ValueError):
                     pass
 
-        # Keyboard fallback
+        # Keyboard fallback.
         keys = pygame.key.get_pressed()
 
         if keys[pygame.K_LEFT]:
             self.angle += 5
+
         if keys[pygame.K_RIGHT]:
             self.angle -= 5
 
@@ -128,19 +209,23 @@ class Player:
         elif not arduino:
             self.speed = 0
 
-        # Movement
+        # Movement.
         self.x += math.cos(
             math.radians(self.angle)
         ) * self.speed
+
         self.y -= math.sin(
             math.radians(self.angle)
         ) * self.speed
 
-        # Screen wrap
+        # Screen wrapping.
         self.x %= WIDTH
         self.y %= HEIGHT
 
 
+# --------------------------------------------------
+# Bullet
+# --------------------------------------------------
 class Bullet:
     def __init__(self, x, y, angle):
         self.x = x
@@ -153,6 +238,7 @@ class Bullet:
         self.x += math.cos(
             math.radians(self.angle)
         ) * self.speed
+
         self.y -= math.sin(
             math.radians(self.angle)
         ) * self.speed
@@ -166,6 +252,9 @@ class Bullet:
         )
 
 
+# --------------------------------------------------
+# Asteroid
+# --------------------------------------------------
 class Asteroid:
     def __init__(self, x, y, size):
         self.x = x
@@ -186,6 +275,7 @@ class Asteroid:
         self.x += math.cos(
             math.radians(self.angle)
         ) * self.speed
+
         self.y -= math.sin(
             math.radians(self.angle)
         ) * self.speed
@@ -203,19 +293,29 @@ class Asteroid:
         )
 
 
+# --------------------------------------------------
+# Collision detection
+# --------------------------------------------------
 def check_collision(obj1, obj2):
     distance = math.hypot(
         obj1.x - obj2.x,
         obj1.y - obj2.y,
     )
+
     return distance < obj1.radius + obj2.radius
 
 
+# --------------------------------------------------
+# Main game
+# --------------------------------------------------
 def main():
     player = Player()
     bullets = []
     asteroids = []
+
     score = 0
+    lives = MAX_LIVES
+    last_lost_time = None
     game_state = "start"
 
     button_rect = pygame.Rect(
@@ -233,39 +333,47 @@ def main():
                 random.randint(0, WIDTH // 3),
                 random.randint(WIDTH * 2 // 3, WIDTH),
             ])
+
             y = random.choice([
                 random.randint(0, HEIGHT // 3),
                 random.randint(HEIGHT * 2 // 3, HEIGHT),
             ])
+
             asteroids.append(Asteroid(x, y, 3))
 
     def reset_game():
-        nonlocal player, bullets, score, game_state
+        nonlocal player, bullets, score
+        nonlocal lives, last_lost_time, game_state
 
         player = Player()
         bullets.clear()
         score = 0
+        lives = MAX_LIVES
+        last_lost_time = None
         game_state = "playing"
+
         spawn_initial_asteroids()
 
     while True:
         clock.tick(FPS)
         mouse_pos = pygame.mouse.get_pos()
 
+        # ------------------------------
+        # Handle events
+        # ------------------------------
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 if arduino:
                     arduino.close()
+
                 pygame.quit()
                 sys.exit()
 
-            # Start screen input
             if game_state == "start":
                 if start_screen.handle_event(event):
                     game_state = "playing"
                     spawn_initial_asteroids()
 
-            # Gameplay input
             elif game_state == "playing":
                 if (
                     event.type == pygame.KEYDOWN
@@ -274,15 +382,19 @@ def main():
                     tip_x = player.x + math.cos(
                         math.radians(player.angle)
                     ) * player.radius * 2
+
                     tip_y = player.y - math.sin(
                         math.radians(player.angle)
                     ) * player.radius * 2
 
                     bullets.append(
-                        Bullet(tip_x, tip_y, player.angle)
+                        Bullet(
+                            tip_x,
+                            tip_y,
+                            player.angle,
+                        )
                     )
 
-            # Game Over input
             elif game_state == "game_over":
                 if (
                     event.type == pygame.KEYDOWN
@@ -297,16 +409,20 @@ def main():
                 ):
                     reset_game()
 
-        # Draw start screen without updating gameplay
+        # ------------------------------
+        # Start screen
+        # ------------------------------
         if game_state == "start":
             start_screen.draw(screen)
-            clock.tick(FPS)
             continue
 
+        # ------------------------------
         # Update gameplay
+        # ------------------------------
         if game_state == "playing":
             player.update()
 
+            # Update bullets.
             for bullet in bullets[:]:
                 bullet.update()
 
@@ -318,25 +434,50 @@ def main():
                 ):
                     bullets.remove(bullet)
 
+            # Update asteroids and check collisions.
             for asteroid in asteroids[:]:
                 asteroid.update()
 
-                # Player collision
-                if check_collision(player, asteroid):
-                    game_state = "game_over"
+                # Player takes damage only once per
+                # invulnerability period.
+                if (
+                    not player.is_invulnerable()
+                    and check_collision(player, asteroid)
+                ):
+                    lives -= 1
+                    last_lost_time = pygame.time.get_ticks()
+
+                    # Remove the asteroid that hit the player.
+                    if asteroid in asteroids:
+                        asteroids.remove(asteroid)
+
+                    if lives <= 0:
+                        game_state = "game_over"
+                        break
+
+                    # Respawn in the middle and blink.
+                    player = Player()
+                    player.invulnerable_until = (
+                        pygame.time.get_ticks()
+                        + INVULNERABILITY_MS
+                    )
+
+                    # Avoid processing another collision
+                    # during this same frame.
                     break
 
-                # Bullet collision
+                # Bullet and asteroid collision.
                 for bullet in bullets[:]:
                     if check_collision(bullet, asteroid):
                         score += asteroid.size * 10
 
                         if bullet in bullets:
                             bullets.remove(bullet)
+
                         if asteroid in asteroids:
                             asteroids.remove(asteroid)
 
-                        # Split into smaller asteroids
+                        # Split larger asteroids.
                         if asteroid.size > 1:
                             asteroids.append(
                                 Asteroid(
@@ -345,6 +486,7 @@ def main():
                                     asteroid.size - 1,
                                 )
                             )
+
                             asteroids.append(
                                 Asteroid(
                                     asteroid.x,
@@ -352,12 +494,15 @@ def main():
                                     asteroid.size - 1,
                                 )
                             )
+
                         break
 
             if game_state == "playing" and not asteroids:
                 spawn_initial_asteroids()
 
-        # Draw active game or Game Over
+        # ------------------------------
+        # Draw frame
+        # ------------------------------
         screen.fill(BLACK)
 
         if game_state == "playing":
@@ -373,10 +518,12 @@ def main():
             game_over_text = font.render(
                 "GAME OVER", True, RED
             )
+
             screen.blit(
                 game_over_text,
                 (
-                    WIDTH // 2 - game_over_text.get_width() // 2,
+                    WIDTH // 2
+                    - game_over_text.get_width() // 2,
                     HEIGHT // 2 - 80,
                 ),
             )
@@ -384,10 +531,12 @@ def main():
             final_score = font.render(
                 f"Final Score: {score}", True, WHITE
             )
+
             screen.blit(
                 final_score,
                 (
-                    WIDTH // 2 - final_score.get_width() // 2,
+                    WIDTH // 2
+                    - final_score.get_width() // 2,
                     HEIGHT // 2 - 35,
                 ),
             )
@@ -397,12 +546,14 @@ def main():
                 if button_rect.collidepoint(mouse_pos)
                 else GRAY
             )
+
             pygame.draw.rect(
                 screen,
                 button_color,
                 button_rect,
                 border_radius=8,
             )
+
             pygame.draw.rect(
                 screen,
                 WHITE,
@@ -414,6 +565,7 @@ def main():
             button_text = button_font.render(
                 "PLAY AGAIN", True, BLACK
             )
+
             screen.blit(
                 button_text,
                 button_text.get_rect(
@@ -421,11 +573,20 @@ def main():
                 ),
             )
 
-        # Score HUD
+        # ------------------------------
+        # HUD
+        # ------------------------------
         score_text = font.render(
             f"Score: {score}", True, WHITE
         )
+
         screen.blit(score_text, (10, 10))
+
+        draw_lives(
+            screen,
+            lives,
+            last_lost_time,
+        )
 
         pygame.display.flip()
 
