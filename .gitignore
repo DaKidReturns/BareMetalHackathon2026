@@ -1,2 +1,4 @@
 BaremetalGame/**
 __pycache__/**
+.DS_Store
+highscore.txt
