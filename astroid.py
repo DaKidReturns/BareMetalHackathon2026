@@ -46,7 +46,7 @@ except (serial.SerialException, OSError):
 
 # Display setup
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Python Asteroids Shooter")
+pygame.display.set_caption("ASTEROIDS SHOOTER")
 
 clock = pygame.time.Clock()
 
@@ -371,26 +371,26 @@ def main():
                     game_state = "playing"
                     spawn_initial_asteroids()
 
-            elif game_state == "playing":
-                if (
-                    event.type == pygame.KEYDOWN
-                    and event.key == pygame.K_SPACE
-                ):
-                    tip_x = player.x + math.cos(
-                        math.radians(player.angle)
-                    ) * player.radius * 2
+            elif game_state in ("playing", "paused"):
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_p:
+                        game_state = "paused" if game_state == "playing" else "playing"
+                    elif event.key == pygame.K_SPACE and game_state == "playing":
+                        tip_x = player.x + math.cos(
+                            math.radians(player.angle)
+                        ) * player.radius * 2
 
-                    tip_y = player.y - math.sin(
-                        math.radians(player.angle)
-                    ) * player.radius * 2
+                        tip_y = player.y - math.sin(
+                            math.radians(player.angle)
+                        ) * player.radius * 2
 
-                    bullets.append(
-                        Bullet(
-                            tip_x,
-                            tip_y,
-                            player.angle,
+                        bullets.append(
+                            Bullet(
+                                tip_x,
+                                tip_y,
+                                player.angle,
+                            )
                         )
-                    )
 
             elif game_state == "game_over":
                 if (
@@ -411,10 +411,11 @@ def main():
         # ------------------------------
         if game_state == "start":
             start_screen.draw(screen)
+            pygame.display.flip()
             continue
 
         # ------------------------------
-        # Update gameplay
+        # Update gameplay (Only when playing)
         # ------------------------------
         if game_state == "playing":
             player.update()
@@ -498,7 +499,7 @@ def main():
         # ------------------------------
         screen.fill(BLACK)
 
-        if game_state == "playing":
+        if game_state in ("playing", "paused"):
             player.draw(screen)
 
             for bullet in bullets:
@@ -506,6 +507,19 @@ def main():
 
             for asteroid in asteroids:
                 asteroid.draw(screen)
+
+            # Draw Pause Screen Overlay
+            if game_state == "paused":
+                pause_overlay = font.render(
+                    "PAUSED - Press P to Resume", True, WHITE
+                )
+                screen.blit(
+                    pause_overlay,
+                    (
+                        WIDTH // 2 - pause_overlay.get_width() // 2,
+                        HEIGHT // 2 - pause_overlay.get_height() // 2,
+                    ),
+                )
 
         elif game_state == "game_over":
             game_over_text = font.render(
