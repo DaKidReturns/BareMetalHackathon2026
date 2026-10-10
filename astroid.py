@@ -46,7 +46,7 @@ except (serial.SerialException, OSError):
 
 # Display setup
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Python Asteroids Shooter")
+pygame.display.set_caption("ASTEROIDS SHOOTER")
 
 clock = pygame.time.Clock()
 
