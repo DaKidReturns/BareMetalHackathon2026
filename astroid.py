@@ -6,6 +6,7 @@ import serial
 
 from start_screen import StartScreen
 from pace_manager import PaceManager
+from score_manager import ScoreManager
 
 # --------------------------------------------------
 # Initialize Pygame
@@ -304,6 +305,7 @@ def main():
     bullets = []
     asteroids = []
     pace_mgr = PaceManager()
+    score_mgr = ScoreManager()
 
     score = 0
     lives = MAX_LIVES
@@ -445,6 +447,7 @@ def main():
                         asteroids.remove(asteroid)
 
                     if lives <= 0:
+                        score_mgr.save_high_score(score)
                         game_state = "game_over"
                         break
 
@@ -514,7 +517,7 @@ def main():
                 (
                     WIDTH // 2
                     - game_over_text.get_width() // 2,
-                    HEIGHT // 2 - 80,
+                    HEIGHT // 2 - 100,
                 ),
             )
 
@@ -527,7 +530,20 @@ def main():
                 (
                     WIDTH // 2
                     - final_score.get_width() // 2,
-                    HEIGHT // 2 - 35,
+                    HEIGHT // 2 - 55,
+                ),
+            )
+
+            high_score_text = font.render(
+                f"High Score: {score_mgr.high_score}", True, LIGHT_GRAY
+            )
+
+            screen.blit(
+                high_score_text,
+                (
+                    WIDTH // 2
+                    - high_score_text.get_width() // 2,
+                    HEIGHT // 2 - 15,
                 ),
             )
 
@@ -571,6 +587,12 @@ def main():
         )
 
         screen.blit(score_text, (10, 10))
+
+        high_score_hud = font.render(
+            f"High: {score_mgr.high_score}", True, GRAY
+        )
+
+        screen.blit(high_score_hud, (10, 38))
 
         draw_lives(
             screen,
