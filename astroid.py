@@ -5,6 +5,7 @@ import sys
 import serial
 
 from start_screen import StartScreen
+from pace_manager import PaceManager
 
 # --------------------------------------------------
 # Initialize Pygame
@@ -32,8 +33,6 @@ MEDIUM_ASTROID = 20
 SMALL_ASTROID = 10
 
 # Serial connection (optional)
-# Change this to your Arduino's actual Linux device path
-# when connecting the Arduino UNO Q.
 try:
     arduino = serial.Serial(
         "/dev/cu.usbmodem13201",
@@ -104,7 +103,6 @@ def draw_lives(surface, lives, last_lost_time):
         )
 
         if index < lives:
-            # A life that is still available.
             pygame.draw.polygon(
                 surface, WHITE, points, 2
             )
@@ -114,7 +112,6 @@ def draw_lives(surface, lives, last_lost_time):
             and last_lost_time is not None
             and now - last_lost_time < LIFE_FLASH_MS
         ):
-            # The most recently lost life flashes red.
             pygame.draw.polygon(
                 surface, RED, points
             )
@@ -123,7 +120,6 @@ def draw_lives(surface, lives, last_lost_time):
             )
 
         else:
-            # Lost lives become empty grey outlines.
             pygame.draw.polygon(
                 surface, GRAY, points, 2
             )
@@ -149,7 +145,6 @@ class Player:
         )
 
     def draw(self, surface):
-        # Blink while temporarily invulnerable.
         if self.is_invulnerable():
             blink_interval = 120
             if (
@@ -169,7 +164,6 @@ class Player:
         )
 
     def update(self):
-        # Read optional Arduino sensor data.
         if arduino:
             while arduino.in_waiting > 0:
                 try:
@@ -195,7 +189,6 @@ class Player:
                 except (UnicodeDecodeError, ValueError):
                     pass
 
-        # Keyboard fallback.
         keys = pygame.key.get_pressed()
 
         if keys[pygame.K_LEFT]:
@@ -209,7 +202,6 @@ class Player:
         elif not arduino:
             self.speed = 0
 
-        # Movement.
         self.x += math.cos(
             math.radians(self.angle)
         ) * self.speed
@@ -218,7 +210,6 @@ class Player:
             math.radians(self.angle)
         ) * self.speed
 
-        # Screen wrapping.
         self.x %= WIDTH
         self.y %= HEIGHT
 
@@ -256,7 +247,7 @@ class Bullet:
 # Asteroid
 # --------------------------------------------------
 class Asteroid:
-    def __init__(self, x, y, size):
+    def __init__(self, x, y, size, speed_range=(1.0, 3.0)):
         self.x = x
         self.y = y
         self.size = size
@@ -269,7 +260,7 @@ class Asteroid:
             self.radius = SMALL_ASTROID
 
         self.angle = random.randint(0, 360)
-        self.speed = random.uniform(1, 3)
+        self.speed = random.uniform(speed_range[0], speed_range[1])
 
     def update(self):
         self.x += math.cos(
@@ -312,6 +303,7 @@ def main():
     player = Player()
     bullets = []
     asteroids = []
+    pace_mgr = PaceManager()
 
     score = 0
     lives = MAX_LIVES
@@ -327,8 +319,10 @@ def main():
 
     def spawn_initial_asteroids():
         asteroids.clear()
+        count = pace_mgr.get_spawn_count(score)
+        speed_range = pace_mgr.get_asteroid_speed_range()
 
-        for _ in range(5):
+        for _ in range(count):
             x = random.choice([
                 random.randint(0, WIDTH // 3),
                 random.randint(WIDTH * 2 // 3, WIDTH),
@@ -339,7 +333,7 @@ def main():
                 random.randint(HEIGHT * 2 // 3, HEIGHT),
             ])
 
-            asteroids.append(Asteroid(x, y, 3))
+            asteroids.append(Asteroid(x, y, 3, speed_range))
 
     def reset_game():
         nonlocal player, bullets, score
@@ -351,6 +345,7 @@ def main():
         lives = MAX_LIVES
         last_lost_time = None
         game_state = "playing"
+        pace_mgr.reset()
 
         spawn_initial_asteroids()
 
@@ -421,6 +416,7 @@ def main():
         # ------------------------------
         if game_state == "playing":
             player.update()
+            pace_mgr.update(player)
 
             # Update bullets.
             for bullet in bullets[:]:
@@ -438,8 +434,6 @@ def main():
             for asteroid in asteroids[:]:
                 asteroid.update()
 
-                # Player takes damage only once per
-                # invulnerability period.
                 if (
                     not player.is_invulnerable()
                     and check_collision(player, asteroid)
@@ -447,7 +441,6 @@ def main():
                     lives -= 1
                     last_lost_time = pygame.time.get_ticks()
 
-                    # Remove the asteroid that hit the player.
                     if asteroid in asteroids:
                         asteroids.remove(asteroid)
 
@@ -455,18 +448,13 @@ def main():
                         game_state = "game_over"
                         break
 
-                    # Respawn in the middle and blink.
                     player = Player()
                     player.invulnerable_until = (
                         pygame.time.get_ticks()
                         + INVULNERABILITY_MS
                     )
-
-                    # Avoid processing another collision
-                    # during this same frame.
                     break
 
-                # Bullet and asteroid collision.
                 for bullet in bullets[:]:
                     if check_collision(bullet, asteroid):
                         score += asteroid.size * 10
@@ -477,13 +465,14 @@ def main():
                         if asteroid in asteroids:
                             asteroids.remove(asteroid)
 
-                        # Split larger asteroids.
                         if asteroid.size > 1:
+                            speed_range = pace_mgr.get_asteroid_speed_range()
                             asteroids.append(
                                 Asteroid(
                                     asteroid.x,
                                     asteroid.y,
                                     asteroid.size - 1,
+                                    speed_range,
                                 )
                             )
 
@@ -492,6 +481,7 @@ def main():
                                     asteroid.x,
                                     asteroid.y,
                                     asteroid.size - 1,
+                                    speed_range,
                                 )
                             )
 
